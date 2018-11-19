@@ -10,7 +10,7 @@ namespace IPCSharpTest
     public class MemoryAccessTest
     {
         [TestMethod]
-        public void TestMethod1()
+        public void RunTest()
         {
             var task = RemoteExecuting.Execute(RunRemote);
             RunLocal();
@@ -31,8 +31,8 @@ namespace IPCSharpTest
         public unsafe static void RunLocal()
         {
             var mem = new SharedMemory(_channel.GetSubChannel("mem"));
-            int* ptr1 = (int*)mem.Allocate(4).Pointer.ToPointer();
-            int* ptr2 = (int*)mem.Allocate(4).Pointer.ToPointer();
+            int* ptr1 = (int*)mem.Allocate(_channel.GetSubChannel("A"), 4).Pointer;
+            int* ptr2 = (int*)mem.Allocate(_channel.GetSubChannel("B"), 4).Pointer;
             Func<bool> func = () => Volatile.Read(ref *ptr2) == 2;
 
             FastSpinUntil(() => Volatile.Read(ref *ptr2) == 1, 2000);
@@ -60,8 +60,8 @@ namespace IPCSharpTest
         public unsafe static void RunRemote()
         {
             var mem = new SharedMemory(_channel.GetSubChannel("mem"));
-            int* ptr1 = (int*)mem.Allocate(4).Pointer.ToPointer();
-            int* ptr2 = (int*)mem.Allocate(4).Pointer.ToPointer();
+            int* ptr1 = (int*)mem.Allocate(_channel.GetSubChannel("A"), 4).Pointer;
+            int* ptr2 = (int*)mem.Allocate(_channel.GetSubChannel("B"), 4).Pointer;
             Func<bool> func = () => Volatile.Read(ref *ptr1) == 1;
 
             Volatile.Write(ref *ptr2, 1);

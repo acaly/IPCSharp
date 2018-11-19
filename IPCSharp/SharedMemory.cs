@@ -9,25 +9,29 @@ namespace IPCSharp
 {
     public class SharedMemory : IDisposable
     {
-        //Note that this is different from SharedMemoryBlock.
-        private struct Block
+        private struct Page
         {
             public MemoryMappedFile File;
             public MemoryMappedViewAccessor Access;
+            public MemoryAllocation Allocator;
         }
 
         private bool _disposed = false;
-        private Channel _channel;
-        private int _blockSize;
-        private List<Block> _blocks = new List<Block>();
-        private int _allocatePos = 0;
+        private readonly int _magic;
+        private readonly Channel _channel;
+        private readonly int _pageSize;
+        private readonly List<Page> _pages = new List<Page>();
         internal bool IsValid => !_disposed;
 
-        public SharedMemory(Channel channel, int blockSize = 4096)
+        private Dictionary<int, SharedMemoryBlock> _allocationList = 
+            new Dictionary<int, SharedMemoryBlock>();
+
+        public SharedMemory(Channel channel, int pageSize = 4096)
         {
             _channel = channel;
-            _blockSize = blockSize;
-            NewBlock();
+            _pageSize = pageSize;
+            _magic = Crc32.ComputeChannelChecksum(channel);
+            NewPage();
         }
 
         public void Dispose()
@@ -42,66 +46,158 @@ namespace IPCSharp
 
             if (disposing)
             {
-                foreach (var bl in _blocks)
+                foreach (var p in _pages)
                 {
-                    bl.File.Dispose();
-                    bl.Access.Dispose();
+                    p.File.Dispose();
+                    p.Access.Dispose();
                 }
-                _blocks.Clear();
+                _pages.Clear();
             }
         }
 
-        private void NewBlock()
+        private void NewPage()
         {
             lock (this)
             {
-                Block block = new Block();
-                var id = _channel.GetId(_blocks.Count.ToString());
-                //Note that by using memory based file, the content is guaranteed to be 0.
-                block.File = MemoryMappedFile.CreateOrOpen(id, _blockSize);
-                block.Access = block.File.CreateViewAccessor();
-                _blocks.Add(block);
+                Page p = new Page();
+                var id = _channel.GetId(_pages.Count.ToString());
+                p.File = MemoryMappedFile.CreateOrOpen(id, _pageSize);
+                p.Access = p.File.CreateViewAccessor();
+                var pagePtr = GetPointer(p);
+                var basePtr = _pages.Count == 0 ? pagePtr : GetPointer(_pages[0]);
+                p.Allocator = new MemoryAllocation(basePtr, pagePtr, _pageSize);
+                p.Allocator.LockCurrentPage();
+                try
+                {
+                    p.Allocator.TryInit(_magic);
+                }
+                finally
+                {
+                    p.Allocator.UnlockCurrentPage();
+                }
+                _pages.Add(p);
             }
         }
 
-        public SharedMemoryBlock Allocate(int size)
+        //Throw if inconsistent size
+        private bool FindAllocation(Page p, int id, int size, out SharedMemoryBlock result)
         {
+            var offset = p.Allocator.TryFindAllocated(id, size);
+            if (offset != 0)
+            {
+                result = new SharedMemoryBlock(this, _pages.Count - 1, offset, size);
+                return true;
+            }
+            result = null;
+            return false;
+        }
+
+        private bool TryAllocateAtLastPage(int id, int size, out SharedMemoryBlock result)
+        {
+            var offset = _pages[_pages.Count - 1].Allocator.TryAllocate(id, size);
+            if (offset != 0)
+            {
+                result = new SharedMemoryBlock(this, _pages.Count - 1, offset, size);
+                return true;
+            }
+            result = null;
+            return false;
+        }
+
+        public SharedMemoryBlock Allocate(Channel channel, int size)
+        {
+            return Allocate(Crc32.ComputeChannelChecksum(channel), size);
+        }
+
+        public SharedMemoryBlock Allocate(int id, int size)
+        {
+            if (size > _pageSize)
+            {
+                throw new ArgumentOutOfRangeException(nameof(size));
+            }
+            if (id == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(id));
+            }
             lock (this)
             {
-                if (size > _blockSize)
+                //1. Check local list.
+                if (_allocationList.TryGetValue(id, out var ret))
                 {
-                    throw new ArgumentOutOfRangeException(nameof(size));
+                    if (ret.Length != size)
+                    {
+                        throw new ArgumentException("Block size inconsistent");
+                    }
                 }
-                if (_allocatePos + size > _blockSize)
+                //2. Before anything else, lock base page.
+                _pages[0].Allocator.LockCurrentPage();
+                try
                 {
-                    NewBlock();
-                    _allocatePos = 0;
+                    //3. Find through all pages.
+                    foreach (var p in _pages)
+                    {
+                        if (FindAllocation(p, id, size, out ret))
+                        {
+                            return ret;
+                        }
+                    }
+                    //4. Create in last page.
+                    if (TryAllocateAtLastPage(id, size, out ret))
+                    {
+                        return ret;
+                    }
+                    //5. Not enough space. Allocate in new page.
+                    while (true)
+                    {
+                        NewPage();
+                        //Check new page. It's possible that the other process has
+                        //created it in the new page.
+                        if (FindAllocation(_pages[_pages.Count - 1], id, size, out ret))
+                        {
+                            return ret;
+                        }
+                        //Then try allocating again.
+                        if (TryAllocateAtLastPage(id, size, out ret))
+                        {
+                            return ret;
+                        }
+                    }
                 }
-                var offset = _allocatePos;
-                _allocatePos += size;
-                return new SharedMemoryBlock(this, _blocks.Count - 1, offset);
+                finally
+                {
+                    _pages[0].Allocator.UnlockCurrentPage();
+                }
             }
         }
 
-        internal unsafe IntPtr GetPointer(int block, int offset)
+        private static unsafe IntPtr GetPointer(Page page)
         {
+            byte* basePtr = null;
+            page.Access.SafeMemoryMappedViewHandle.AcquirePointer(ref basePtr);
+            return new IntPtr(basePtr);
+        }
+
+        internal unsafe IntPtr GetPointer(int page, int offset, int len)
+        {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(SharedMemory));
+            }
+            if (offset > _pageSize)
+            {
+                throw new ArgumentOutOfRangeException(nameof(offset));
+            }
+            if (offset + len > _pageSize)
+            {
+                throw new ArgumentOutOfRangeException(nameof(len));
+            }
             lock (this)
             {
-                if (_disposed)
+                if (page > _pages.Count)
                 {
-                    throw new ObjectDisposedException(nameof(SharedMemory));
+                    throw new ArgumentOutOfRangeException(nameof(page));
                 }
-                if (block > _blocks.Count)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(block));
-                }
-                if (offset >= _blockSize)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(offset));
-                }
-                byte* basePtr = null;
-                _blocks[block].Access.SafeMemoryMappedViewHandle.AcquirePointer(ref basePtr);
-                return new IntPtr(basePtr + offset);
+                return GetPointer(_pages[page]) + offset;
             }
         }
     }

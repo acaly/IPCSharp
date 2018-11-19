@@ -9,9 +9,9 @@ namespace IPCSharp
     //Modified from http://www.sanity-free.com/12/crc32_implementation_in_csharp.html
     internal class Crc32
     {
-        private uint[] table;
+        private static uint[] table;
 
-        public uint ComputeChecksum(byte[] bytes)
+        public static uint ComputeChecksum(byte[] bytes)
         {
             uint crc = 0xffffffff;
             for (int i = 0; i < bytes.Length; ++i)
@@ -22,17 +22,22 @@ namespace IPCSharp
             return ~crc;
         }
 
-        public byte[] ComputeChecksumBytes(byte[] bytes)
+        public static byte[] ComputeChecksumBytes(byte[] bytes)
         {
             return BitConverter.GetBytes(ComputeChecksum(bytes));
         }
 
-        public string ComputeChecksumString(byte[] bytes)
+        public static string ComputeChecksumString(byte[] bytes)
         {
             return string.Format("{0:X8}", ComputeChecksum(bytes));
         }
 
-        public Crc32()
+        public static int ComputeChannelChecksum(Channel ch)
+        {
+            return (int)ComputeChecksum(Encoding.Unicode.GetBytes(ch.GetId()));
+        }
+
+        static Crc32()
         {
             uint poly = 0xedb88320;
             table = new uint[256];

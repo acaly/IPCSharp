@@ -9,7 +9,6 @@ namespace IPCSharp
 {
     public class Channel
     {
-        private static readonly Crc32 _crc16 = new Crc32();
         private static readonly string _commonPrefix = "ipcs_";
         private readonly string _id;
 
@@ -26,7 +25,7 @@ namespace IPCSharp
 
         public static Channel FromHash(string name)
         {
-            return FromString(_crc16.ComputeChecksumString(Encoding.Unicode.GetBytes(name)));
+            return FromString(Crc32.ComputeChecksumString(Encoding.Unicode.GetBytes(name)));
         }
 
         public static Channel FromExecutablePath()
