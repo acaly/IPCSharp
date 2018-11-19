@@ -54,7 +54,7 @@ namespace IPCSharpTest
             }
 
             var time = clock.ElapsedTicks / (float)TimeSpan.TicksPerMillisecond * 1000;
-            Console.WriteLine("Round-trip delay: {0} ns", time / 50);
+            Console.WriteLine("Round-trip delay: {0} us", time / 50);
         }
 
         public unsafe static void RunRemote()
