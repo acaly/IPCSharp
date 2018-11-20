@@ -22,7 +22,7 @@ namespace IPCSharpTest
             //Create
             for (int i = 0; i < 200; ++i)
             {
-                blocks.Add(memory.Allocate(id0 + i, 4 * blockSize).Pointer);
+                blocks.Add(memory.Allocate(id0 + i, 4 * blockSize, 4).Pointer);
             }
 
             //Write

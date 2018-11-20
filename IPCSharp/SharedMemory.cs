@@ -92,9 +92,9 @@ namespace IPCSharp
             return false;
         }
 
-        private bool TryAllocateAtLastPage(int id, int size, out SharedMemoryBlock result)
+        private bool TryAllocateAtLastPage(int id, int size, int a, out SharedMemoryBlock result)
         {
-            var offset = _pages[_pages.Count - 1].Allocator.TryAllocate(id, size);
+            var offset = _pages[_pages.Count - 1].Allocator.TryAllocate(id, size, a);
             if (offset != 0)
             {
                 result = new SharedMemoryBlock(this, _pages.Count - 1, offset, size);
@@ -104,12 +104,12 @@ namespace IPCSharp
             return false;
         }
 
-        public SharedMemoryBlock Allocate(Channel channel, int size)
+        public SharedMemoryBlock Allocate(Channel channel, int size, int alignement)
         {
-            return Allocate(Crc32.ComputeChannelChecksum(channel), size);
+            return Allocate(Crc32.ComputeChannelChecksum(channel), size, alignement);
         }
 
-        public SharedMemoryBlock Allocate(int id, int size)
+        public SharedMemoryBlock Allocate(int id, int size, int alignement)
         {
             if (size > _pageSize)
             {
@@ -142,7 +142,7 @@ namespace IPCSharp
                         }
                     }
                     //4. Create in last page.
-                    if (TryAllocateAtLastPage(id, size, out ret))
+                    if (TryAllocateAtLastPage(id, size, alignement, out ret))
                     {
                         return ret;
                     }
@@ -157,7 +157,7 @@ namespace IPCSharp
                             return ret;
                         }
                         //Then try allocating again.
-                        if (TryAllocateAtLastPage(id, size, out ret))
+                        if (TryAllocateAtLastPage(id, size, alignement, out ret))
                         {
                             return ret;
                         }

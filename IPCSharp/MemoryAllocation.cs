@@ -97,13 +97,25 @@ namespace IPCSharp
                     }
                     else if (currentId == id)
                     {
-                        //TODO probably we should check the size? (need one more int）
+                        //TODO probably we should check the size? (need one more int),
+                        //and also alignment.
                         return tablePtr->Entries[i * 2 + 1];
                     }
                 }
                 offset = tablePtr->NextAllocationTable;
             }
             return 0;
+        }
+
+        private static int ApplyAlignment(int offset, int alignment)
+        {
+            return (offset + alignment - 1) / alignment * alignment;
+        }
+
+        private AllocationTable* GetAllocationTablePtr(int offset)
+        {
+            IntPtr tableIntPtr = new IntPtr(_currentPagePtr) + offset;
+            return (AllocationTable*)tableIntPtr;
         }
 
         /// <summary>
@@ -114,9 +126,9 @@ namespace IPCSharp
         /// <param name="id">Id of the block used to check existence.</param>
         /// <param name="len">Length of the block.</param>
         /// <returns>Offset if success. 0 if failed.</returns>
-        public int TryAllocate(int id, int len)
+        public int TryAllocate(int id, int len, int alignment)
         {
-            int dataOffset = _currentPagePtr->AllocationSize;
+            int dataOffset = ApplyAlignment(_currentPagePtr->AllocationSize, alignment);
             if (dataOffset + len > _pageSize)
             {
                 //Not enough space for data.
@@ -127,8 +139,7 @@ namespace IPCSharp
             //Try to find an empty slot in existing tables.
             while (tableOffset != 0)
             {
-                IntPtr tableIntPtr = new IntPtr(_currentPagePtr) + tableOffset;
-                AllocationTable* tablePtr = (AllocationTable*)tableIntPtr;
+                AllocationTable* tablePtr = GetAllocationTablePtr(tableOffset);
                 for (int i = 0; i < TableSize; ++i)
                 {
                     var currentId = tablePtr->Entries[i * 2];
@@ -136,7 +147,7 @@ namespace IPCSharp
                     {
                         tablePtr->Entries[i * 2] = id;
                         tablePtr->Entries[i * 2 + 1] = dataOffset;
-                        _currentPagePtr->AllocationSize += len;
+                        _currentPagePtr->AllocationSize = dataOffset + len;
                         return dataOffset;
                     }
                 }
@@ -144,26 +155,24 @@ namespace IPCSharp
                 tableOffset = tablePtr->NextAllocationTable;
             }
             //Not enough table. Create a new one.
-            if (dataOffset + len + TableStructSize > _pageSize)
+            tableOffset = ApplyAlignment(dataOffset + len, 4);
+            if (tableOffset + TableStructSize > _pageSize)
             {
                 //Not enough space for a new table.
                 return 0;
             }
             {
                 //Set up AllocationTable linked list.
-                IntPtr tableIntPtr = new IntPtr(_currentPagePtr) + lastTableOffset;
-                AllocationTable* tablePtr = (AllocationTable*)tableIntPtr;
-                tableOffset = dataOffset + len;
+                AllocationTable* tablePtr = GetAllocationTablePtr(lastTableOffset);
                 tablePtr->NextAllocationTable = tableOffset;
             }
             {
                 //Create new entry.
-                IntPtr tableIntPtr = new IntPtr(_currentPagePtr) + tableOffset;
-                AllocationTable* tablePtr = (AllocationTable*)tableIntPtr;
+                AllocationTable* tablePtr = GetAllocationTablePtr(tableOffset);
                 tablePtr->Entries[0] = id;
                 tablePtr->Entries[1] = dataOffset;
             }
-            _currentPagePtr->AllocationSize += len + TableStructSize;
+            _currentPagePtr->AllocationSize = tableOffset + TableStructSize;
             return dataOffset;
         }
     }
